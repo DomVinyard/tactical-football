@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Tactical Football - Chess Meets Soccer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0a0a0a;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      font-family: 'Courier New', monospace;
+      color: #fff;
+    }
+
+    #game-container {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+    }
+
+    canvas {
+      display: block;
+      background: #1a3a1a;
+      border: 4px solid #333;
+      image-rendering: pixelated;
+      box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+    }
+
+    #ui {
+      display: flex;
+      gap: 40px;
+      font-size: 18px;
+      text-shadow: 2px 2px #000;
+    }
+
+    #ui .stat {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+    }
+
+    #ui .label {
+      color: #888;
+      font-size: 14px;
+    }
+
+    #ui .value {
+      color: #0f0;
+      font-size: 24px;
+      font-weight: bold;
+    }
+
+    #turn-indicator {
+      color: #ff0;
+      font-size: 20px;
+      text-align: center;
+      min-height: 30px;
+    }
+
+    .screen-overlay {
+      position: absolute;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background: rgba(0,0,0,0.9);
+      color: #fff;
+      text-align: center;
+      padding: 20px;
+      z-index: 10;
+    }
+
+    .screen-overlay.visible { display: flex; }
+
+    .screen-overlay h1 { 
+      font-size: 48px; 
+      margin-bottom: 20px; 
+      color: #0f0;
+      text-shadow: 3px 3px #000;
+    }
+
+    .screen-overlay p { 
+      font-size: 20px; 
+      margin-bottom: 30px; 
+      line-height: 1.6;
+    }
+
+    .screen-overlay .controls {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 20px;
+      border-radius: 10px;
+      margin-bottom: 20px;
+      font-size: 14px;
+      line-height: 1.8;
+    }
+
+    button {
+      padding: 15px 30px;
+      font-size: 20px;
+      background: #0f0;
+      color: #000;
+      border: none;
+      cursor: pointer;
+      font-family: inherit;
+      font-weight: bold;
+      border-radius: 5px;
+      transition: background 0.2s;
+    }
+
+    button:hover {
+      background: #0d0;
+    }
+
+    #start-screen .controls {
+      text-align: left;
+    }
+
+    #game-over .final-stats {
+      font-size: 28px;
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-container">
+    <canvas id="game"></canvas>
+    <div id="turn-indicator"></div>
+    <div id="ui">
+      <div class="stat">
+        <div class="label">PLAYER SCORE</div>
+        <div class="value" id="player-score">0</div>
+      </div>
+      <div class="stat">
+        <div class="label">TURN</div>
+        <div class="value" id="turn">1/10</div>
+      </div>
+      <div class="stat">
+        <div class="label">AI SCORE</div>
+        <div class="value" id="ai-score">0</div>
+      </div>
+    </div>
+
+    <div id="start-screen" class="screen-overlay visible">
+      <h1>TACTICAL FOOTBALL</h1>
+      <p>Chess meets soccer. Move your players strategically to score goals!</p>
+      <div class="controls">
+        <strong>HOW TO PLAY:</strong><br>
+        • Click a player to select<br>
+        • Click a highlighted square to move<br>
+        • Different player types move differently<br>
+        • Get the ball to the opponent's goal to score<br>
+        • Most goals after 10 turns per half wins!<br>
+        <br>
+        <strong>PLAYER TYPES:</strong><br>
+        🔵 Striker: Fast, moves 3 squares<br>
+        🔵 Midfielder: Balanced, moves 2 squares<br>
+        🔵 Defender: Strong, moves 1 square
+      </div>
+      <button id="start-btn">START MATCH</button>
+    </div>
+
+    <div id="game-over" class="screen-overlay">
+      <h1 id="game-over-title">FULL TIME</h1>
+      <div class="final-stats">
+        <span id="final-player-score">0</span> - <span id="final-ai-score">0</span>
+      </div>
+      <p id="game-over-message"></p>
+      <button id="restart-btn">PLAY AGAIN</button>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    const GRID_COLS = 8;
+    const GRID_ROWS = 12;
+    const CELL_SIZE = 50;
+    const GAME_WIDTH = GRID_COLS * CELL_SIZE;
+    const GAME_HEIGHT = GRID_ROWS * CELL_SIZE;
+
+    canvas.width = GAME_WIDTH;
+    canvas.height = GAME_HEIGHT;
+
+    let gameState = 'start';
+    let playerScore = 0;
+    let aiScore = 0;
+    let currentTurn = 0;
+    let maxTurnsPerHalf = 10;
+    let isPlayerTurn = true;
+    let selectedPiece = null;
+    let validMoves = [];
+    let ball = { col: 3, row: 6 };
+    let playerPieces = [];
+    let aiPieces = [];
+    let shakeAmount = 0;
+    let flashAlpha = 0;
+    let flashColor = '#fff';
+
+    const PIECE_TYPES = {
+      STRIKER: { name: 'striker', moveRange: 3, color: '#00aaff' },
+      MIDFIELDER: { name: 'midfielder', moveRange: 2, color: '#4488ff' },
+      DEFENDER: { name: 'defender', moveRange: 1, color: '#0066cc' }
+    };
+
+    function init() {
+      playerScore = 0;
+      aiScore = 0;
+      currentTurn = 1;
+      isPlayerTurn = true;
+      selectedPiece = null;
+      validMoves = [];
+      ball = { col: 3, row: 6 };
+
+      playerPieces = [
+        { col: 1, row: 10, type: PIECE_TYPES.DEFENDER, team: 'player' },
+        { col: 3, row: 10, type: PIECE_TYPES.DEFENDER, team: 'player' },
+        { col: 6, row: 10, type: PIECE_TYPES.DEFENDER, team: 'player' },
+        { col: 2, row: 8, type: PIECE_TYPES.MIDFIELDER, team: 'player' },
+        { col: 5, row: 8, type: PIECE_TYPES.MIDFIELDER, team: 'player' },
+        { col: 3, row: 7, type: PIECE_TYPES.STRIKER, team: 'player' },
+      ];
+
+      aiPieces = [
+        { col: 1, row: 1, type: PIECE_TYPES.DEFENDER, team: 'ai' },
+        { col: 3, row: 1, type: PIECE_TYPES.DEFENDER, team: 'ai' },
+        { col: 6, row: 1, type: PIECE_TYPES.DEFENDER, team: 'ai' },
+        { col: 2, row: 3, type: PIECE_TYPES.MIDFIELDER, team: 'ai' },
+        { col: 5, row: 3, type: PIECE_TYPES.MIDFIELDER, team: 'ai' },
+        { col: 3, row: 4, type: PIECE_TYPES.STRIKER, team: 'ai' },
+      ];
+
+      updateUI();
+    }
+
+    function updateUI() {
+      document.getElementById('player-score').textContent = playerScore;
+      document.getElementById('ai-score').textContent = aiScore;
+      document.getElementById('turn').textContent = `${currentTurn}/${maxTurnsPerHalf}`;
+      
+      const turnIndicator = document.getElementById('turn-indicator');
+      if (gameState === 'playing') {
+        turnIndicator.textContent = isPlayerTurn ? 'YOUR TURN' : 'AI THINKING...';
+        turnIndicator.style.color = isPlayerTurn ? '#0f0' : '#f80';
+      } else {
+        turnIndicator.textContent = '';
+      }
+    }
+
+    function getValidMoves(piece) {
+      const moves = [];
+      const range = piece.type.moveRange;
+
+      for (let dc = -range; dc <= range; dc++) {
+        for (let dr = -range; dr <= range; dr++) {
+          if (dc === 0 && dr === 0) continue;
+          
+          const newCol = piece.col + dc;
+          const newRow = piece.row + dr;
+
+          if (newCol >= 0 && newCol < GRID_COLS && newRow >= 0 && newRow < GRID_ROWS) {
+            const distance = Math.abs(dc) + Math.abs(dr);
+            if (distance <= range) {
+              const occupied = [...playerPieces, ...aiPieces].find(p => p.col === newCol && p.row === newRow);
+              if (!occupied) {
+                moves.push({ col: newCol, row: newRow });
+              }
+            }
+          }
+        }
+      }
+
+      return moves;
+    }
+
+    function movePiece(piece, newCol, newRow) {
+      piece.col = newCol;
+      piece.row = newRow;
+
+      if (ball.col === newCol && ball.row === newRow) {
+        return;
+      }
+
+      const distToBall = Math.abs(piece.col - ball.col) + Math.abs(piece.row - ball.row);
+      if (distToBall <= 1) {
+        ball.col = piece.col;
+        ball.row = piece.row;
+      }
+    }
+
+    function checkGoal() {
+      if (ball.row === 0) {
+        playerScore++;
+        flash('#0f0');
+        shake(10);
+        resetBall();
+        return true;
+      }
+      
+      if (ball.row === GRID_ROWS - 1) {
+        aiScore++;
+        flash('#f00');
+        shake(10);
+        resetBall();
+        return true;
+      }
+
+      return false;
+    }
+
+    function resetBall() {
+      ball.col = Math.floor(GRID_COLS / 2);
+      ball.row = Math.floor(GRID_ROWS / 2);
+    }
+
+    function switchTurn() {
+      if (isPlayerTurn) {
+        isPlayerTurn = false;
+        updateUI();
+        setTimeout(aiTurn, 800);
+      } else {
+        isPlayerTurn = true;
+        currentTurn++;
+        
+        if (currentTurn > maxTurnsPerHalf) {
+          endGame();
+        } else {
+          updateUI();
+        }
+      }
+    }
+
+    function aiTurn() {
+      if (gameState !== 'playing') return;
+
+      const closestToBall = aiPieces.sort((a, b) => {
+        const distA = Math.abs(a.col - ball.col) + Math.abs(a.row - ball.row);
+        const distB = Math.abs(b.col - ball.col) + Math.abs(b.row - ball.row);
+        return distA - distB;
+      })[0];
+
+      const moves = getValidMoves(closestToBall);
+      
+      if (moves.length > 0) {
+        const hasBall = (ball.col === closestToBall.col && ball.row === closestToBall.row);
+        
+        let bestMove;
+        if (hasBall) {
+          bestMove = moves.sort((a, b) => a.row - b.row)[0];
+        } else {
+          bestMove = moves.sort((a, b) => {
+            const distA = Math.abs(a.col - ball.col) + Math.abs(a.row - ball.row);
+            const distB = Math.abs(b.col - ball.col) + Math.abs(b.row - ball.row);
+            return distA - distB;
+          })[0];
+        }
+
+        movePiece(closestToBall, bestMove.col, bestMove.row);
+        
+        if (checkGoal()) {
+          updateUI();
+        }
+      }
+
+      switchTurn();
+    }
+
+    function endGame() {
+      gameState = 'gameover';
+      
+      document.getElementById('final-player-score').textContent = playerScore;
+      document.getElementById('final-ai-score').textContent = aiScore;
+      
+      const titleEl = document.getElementById('game-over-title');
+      const messageEl = document.getElementById('game-over-message');
+      
+      if (playerScore > aiScore) {
+        titleEl.textContent = 'VICTORY!';
+        titleEl.style.color = '#0f0';
+        messageEl.textContent = 'You dominated the pitch!';
+      } else if (aiScore > playerScore) {
+        titleEl.textContent = 'DEFEAT';
+        titleEl.style.color = '#f00';
+        messageEl.textContent = 'The AI outplayed you this time.';
+      } else {
+        titleEl.textContent = 'DRAW';
+        titleEl.style.color = '#ff0';
+        messageEl.textContent = 'Evenly matched!';
+      }
+      
+      document.getElementById('game-over').classList.add('visible');
+      
+      const highScore = parseInt(localStorage.getItem('tacticalFootballHighScore') || '0');
+      if (playerScore > highScore) {
+        localStorage.setItem('tacticalFootballHighScore', playerScore.toString());
+      }
+    }
+
+    function flash(color = '#fff') {
+      flashColor = color;
+      flashAlpha = 0.3;
+    }
+
+    function shake(intensity = 5) {
+      shakeAmount = intensity;
+    }
+
+    function render() {
+      ctx.save();
+      
+      if (shakeAmount > 0) {
+        ctx.translate(
+          (Math.random() - 0.5) * shakeAmount,
+          (Math.random() - 0.5) * shakeAmount
+        );
+        shakeAmount *= 0.9;
+        if (shakeAmount < 0.5) shakeAmount = 0;
+      }
+
+      ctx.fillStyle = '#1a3a1a';
+      ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+      for (let row = 0; row < GRID_ROWS; row++) {
+        for (let col = 0; col < GRID_COLS; col++) {
+          const x = col * CELL_SIZE;
+          const y = row * CELL_SIZE;
+          
+          const isDark = (row + col) % 2 === 0;
+          ctx.fillStyle = isDark ? '#1a3a1a' : '#2a4a2a';
+          ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+          
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+          ctx.strokeRect(x, y, CELL_SIZE, CELL_SIZE);
+        }
+      }
+
+      ctx.fillStyle = 'rgba(255, 255, 0, 0.3)';
+      ctx.fillRect(0, 0, GAME_WIDTH, CELL_SIZE);
+      ctx.strokeStyle = '#ff0';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(CELL_SIZE * 2, 0, CELL_SIZE * 4, CELL_SIZE);
+
+      ctx.fillStyle = 'rgba(0, 170, 255, 0.3)';
+      ctx.fillRect(0, GAME_HEIGHT - CELL_SIZE, GAME_WIDTH, CELL_SIZE);
+      ctx.strokeStyle = '#00aaff';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(CELL_SIZE * 2, GAME_HEIGHT - CELL_SIZE, CELL_SIZE * 4, CELL_SIZE);
+
+      validMoves.forEach(move => {
+        const x = move.col * CELL_SIZE;
+        const y = move.row * CELL_SIZE;
+        ctx.fillStyle = 'rgba(0, 255, 0, 0.4)';
+        ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+        ctx.strokeStyle = '#0f0';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, CELL_SIZE, CELL_SIZE);
+      });
+
+      playerPieces.forEach(piece => {
+        drawPiece(piece, piece.type.color);
+      });
+
+      aiPieces.forEach(piece => {
+        drawPiece(piece, '#ff4444');
+      });
+
+      drawBall(ball.col, ball.row);
+
+      if (flashAlpha > 0) {
+        ctx.fillStyle = flashColor;
+        ctx.globalAlpha = flashAlpha;
+        ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+        ctx.globalAlpha = 1;
+        flashAlpha -= 0.02;
+        if (flashAlpha < 0) flashAlpha = 0;
+      }
+
+      ctx.restore();
+    }
+
+    function drawPiece(piece, color) {
+      const x = piece.col * CELL_SIZE + CELL_SIZE / 2;
+      const y = piece.row * CELL_SIZE + CELL_SIZE / 2;
+      const radius = CELL_SIZE * 0.35;
+
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      if (piece === selectedPiece) {
+        ctx.strokeStyle = '#0f0';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(x, y, radius + 5, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = '#000';
+      ctx.font = 'bold 14px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const label = piece.type === PIECE_TYPES.STRIKER ? 'S' : 
+                   piece.type === PIECE_TYPES.MIDFIELDER ? 'M' : 'D';
+      ctx.fillText(label, x, y);
+    }
+
+    function drawBall(col, row) {
+      const x = col * CELL_SIZE + CELL_SIZE / 2;
+      const y = row * CELL_SIZE + CELL_SIZE / 2;
+      const radius = CELL_SIZE * 0.25;
+
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x - radius * 0.7, y);
+      ctx.lineTo(x + radius * 0.7, y);
+      ctx.stroke();
+      
+      ctx.beginPath();
+      ctx.moveTo(x, y - radius * 0.7);
+      ctx.lineTo(x, y + radius * 0.7);
+      ctx.stroke();
+    }
+
+    canvas.addEventListener('click', (e) => {
+      if (gameState !== 'playing' || !isPlayerTurn) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const col = Math.floor(x / CELL_SIZE);
+      const row = Math.floor(y / CELL_SIZE);
+
+      if (selectedPiece) {
+        const validMove = validMoves.find(m => m.col === col && m.row === row);
+        if (validMove) {
+          movePiece(selectedPiece, col, row);
+          
+          if (checkGoal()) {
+            updateUI();
+          }
+          
+          selectedPiece = null;
+          validMoves = [];
+          switchTurn();
+        } else {
+          selectedPiece = null;
+          validMoves = [];
+        }
+      } else {
+        const clickedPiece = playerPieces.find(p => p.col === col && p.row === row);
+        if (clickedPiece) {
+          selectedPiece = clickedPiece;
+          validMoves = getValidMoves(clickedPiece);
+        }
+      }
+
+      render();
+    });
+
+    canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      const touch = e.touches[0];
+      const rect = canvas.getBoundingClientRect();
+      const x = touch.clientX - rect.left;
+      const y = touch.clientY - rect.top;
+      
+      const clickEvent = new MouseEvent('click', {
+        clientX: touch.clientX,
+        clientY: touch.clientY
+      });
+      canvas.dispatchEvent(clickEvent);
+    });
+
+    document.getElementById('start-btn').addEventListener('click', () => {
+      document.getElementById('start-screen').classList.remove('visible');
+      gameState = 'playing';
+      init();
+      updateUI();
+      render();
+    });
+
+    document.getElementById('restart-btn').addEventListener('click', () => {
+      document.getElementById('game-over').classList.remove('visible');
+      gameState = 'playing';
+      init();
+      updateUI();
+      render();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.code === 'Escape' && selectedPiece) {
+        selectedPiece = null;
+        validMoves = [];
+        render();
+      }
+    });
+
+    let lastTime = 0;
+    function gameLoop(timestamp) {
+      const deltaTime = (timestamp - lastTime) / 1000;
+      lastTime = timestamp;
+
+      if (gameState === 'playing') {
+        render();
+      }
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    init();
+    render();
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>
